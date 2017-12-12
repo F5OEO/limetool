@@ -11,6 +11,7 @@
 #include "LimeSuite.h"
 #include <getopt.h>
 #include <ctype.h>
+#include <signal.h>
 #define PROGRAM_VERSION "0.0.1"
 
 FILE *input,*output;
@@ -390,6 +391,24 @@ int SendToOutput(scmplx *BufferRx, int len)
 	}
 }
 
+static bool keep_running=false;
+
+static void signal_handler(int signo)
+{
+    if (signo == SIGINT)
+        fputs("\nCaught SIGINT\n", stderr);
+    else if (signo == SIGTERM)
+        fputs("\nCaught SIGTERM\n", stderr);
+    else if (signo == SIGHUP)
+        fputs("\nCaught SIGHUP\n", stderr);
+    else if (signo == SIGPIPE)
+        fputs("\nReceived SIGPIPE.\n", stderr);
+    else
+        fprintf(stderr, "\nCaught signal: %d\n", signo);
+
+    keep_running = false;
+}
+
 void print_usage()
 {
 
@@ -496,6 +515,17 @@ int main(int argc, char **argv)
 	if (SymbolRate == 0) {
 		fprintf(stderr, "Need set a SampleRate \n"); exit(0);
 	}
+
+     // register signal handlers
+    if (signal(SIGINT, signal_handler) == SIG_ERR)
+        fputs("Warning: Can not install signal handler for SIGINT\n", stderr);
+    if (signal(SIGTERM, signal_handler) == SIG_ERR)
+        fputs("Warning: Can not install signal handler for SIGTERM\n", stderr);
+    if (signal(SIGHUP, signal_handler) == SIG_ERR)
+        fputs("Warning: Can not install signal handler for SIGHUP\n", stderr);
+    if (signal(SIGPIPE, signal_handler) == SIG_ERR)
+        fputs("Warning: Can not install signal handler for SIGPIPE\n", stderr);
+
     #define BUFFER_SIZE 1000*7
     scmplx BufferIQ[BUFFER_SIZE];
 
@@ -514,7 +544,8 @@ int main(int argc, char **argv)
 	limesdr_set_rxfreq(2322e6);
 	limesdr_receive();
 	*/
-    while(1)
+    keep_running=true;
+    while(keep_running)
     { 
 #define TV
 #ifdef TV
