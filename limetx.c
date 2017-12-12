@@ -395,12 +395,13 @@ void print_usage()
 
 	fprintf(stderr, \
 		"limetx -%s\n\
-Usage:\nlimetx -s SymbolRate [-i File Input] [-o File Output] [-f Frequency in Khz]  [-g Gain] [-h] \n\
+Usage:\nlimetx -s SymbolRate [-i File Input] [-o File Output] [-f Frequency in Khz]  [-g Gain] [-t SampleType] [-h] \n\
 -i            Input IQ File I16 format (default stdin) \n\
 -i            OutputIQFile (default stdout) \n\
 -s            SymbolRate in KS \n\
 -f            Frequency in Khz\n\
 -g            Gain 0 to 100\n\
+-t            Input sample type {float,I16} I16 by default\n\
 -h            help (print this help).\n\
 Example : ./limetx -s 1000 -f 1242000 -g 80\n\
 \n", \
@@ -418,9 +419,11 @@ int main(int argc, char **argv)
 	int Gain = 50;
 	int a;
 	int anyargs = 0;
+    enum {TYPE_I16,TYPE_FLOAT};
+    int TypeInput = TYPE_I16;
 	while (1)
 	{
-		a = getopt(argc, argv, "i:o:s:f:g:h");
+		a = getopt(argc, argv, "i:o:s:f:g:ht:");
 
 		if (a == -1)
 		{
@@ -456,6 +459,10 @@ int main(int argc, char **argv)
 			break;
 		case 'g': // Gain 0..100
 			Gain = atoi(optarg);
+			break;
+        case 't': // Input Type
+			if (strcmp("float", optarg) == 0) TypeInput = TYPE_FLOAT;
+            if (strcmp("i16", optarg) == 0) TypeInput = TYPE_I16;
 			break;
 		case 'h': // help
 			print_usage();
@@ -493,6 +500,7 @@ int main(int argc, char **argv)
     scmplx BufferIQ[BUFFER_SIZE];
 
 	scmplx BufferIQRx[BUFFER_SIZE];
+    float fBufferIQ[BUFFER_SIZE*2];
 
     limesdr_init();
     limesdr_set_sr(SymbolRate,0);
@@ -510,11 +518,29 @@ int main(int argc, char **argv)
     { 
 #define TV
 #ifdef TV
-        int NbRead=fread(BufferIQ,sizeof(scmplx),BUFFER_SIZE,input);
-        if(NbRead<0) break;
-        if(NbRead!=BUFFER_SIZE) fprintf(stderr,"Incomplete buffer %d/%d\n",NbRead,BUFFER_SIZE);
-		lime_tx_samples(BufferIQ, NbRead);
-		//int LimeRead=lime_rx_samples(BufferIQRx, BUFFER_SIZE);
+        if(TypeInput==TYPE_I16)
+        {
+            int NbRead=fread(BufferIQ,sizeof(scmplx),BUFFER_SIZE,input);
+            if(NbRead==0) {usleep(1000);continue;}
+            if(NbRead<0) break;
+            if(NbRead!=BUFFER_SIZE) fprintf(stderr,"Incomplete buffer %d/%d\n",NbRead,BUFFER_SIZE);
+		    lime_tx_samples(BufferIQ, NbRead);
+        }
+        if(TypeInput==TYPE_FLOAT)
+        {
+ 
+            int NbRead=fread(fBufferIQ,sizeof(float),BUFFER_SIZE*2,input);
+            if(NbRead<0) break;
+            int NbSample=0;
+            for(int i=0;i<NbRead;i+=2)
+            {
+                BufferIQ[NbSample].re=(short)(fBufferIQ[i]*32767);
+                BufferIQ[NbSample++].im=(short)(fBufferIQ[i+1]*32767);
+            }
+		    lime_tx_samples(BufferIQ, NbSample);
+        }
+
+    		//int LimeRead=lime_rx_samples(BufferIQRx, BUFFER_SIZE);
 		//SendToOutput(BufferIQRxLimeRead);
 		//lime_tx_samples(BufferIQRx, LimeRead);
 		//SendToOutput(BufferIQRx, LimeRead);
