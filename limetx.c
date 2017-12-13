@@ -11,6 +11,7 @@
 #include "LimeSuite.h"
 #include <getopt.h>
 #include <ctype.h>
+#include <signal.h>
 #define PROGRAM_VERSION "0.0.1"
 
 FILE *input,*output;
@@ -43,7 +44,7 @@ int m_oversample = 0;
 int m_Bandwidth = 2000000;
 int OVERSAMPLE = 16;
 
-#define FIFO_SIZE (1024 * 1000)
+
 
 
 int limesdr_init() {
@@ -100,8 +101,8 @@ int limesdr_init() {
 		return -1;
 
 	streamIdRx.channel = 0;
-	streamIdRx.fifoSize = FIFO_SIZE;
-	streamIdRx.throughputVsLatency = 0.0;
+	streamIdRx.fifoSize = 1024 * 1000;
+	streamIdRx.throughputVsLatency = 0.2;
 	streamIdRx.isTx = false;
 	streamIdRx.dataFmt = LMS_FMT_I16;
 
@@ -361,11 +362,11 @@ int lime_tx_samples(scmplx *s, int len)
 	LMS_GetStreamStatus(&streamId, &TxStatus);
 
 
-	if ((debugCnt % 10) == 0)
+	if ((debugCnt % 100) == 0)
 	{
 		//static lms_stream_status_t TxStatus;
 		//LMS_GetStreamStatus(&streamId, &TxStatus);
-		//fprintf(stderr,"Filled %d SymbolRate %f\n", TxStatus.fifoFilledCount,TxStatus.sampleRate);
+		fprintf(stderr,"Filled %d SymbolRate %f\n", TxStatus.fifoFilledCount,TxStatus.sampleRate);
 
 	}
 	return 0;
@@ -390,17 +391,36 @@ int SendToOutput(scmplx *BufferRx, int len)
 	}
 }
 
+static bool keep_running=false;
+
+static void signal_handler(int signo)
+{
+    if (signo == SIGINT)
+        fputs("\nCaught SIGINT\n", stderr);
+    else if (signo == SIGTERM)
+        fputs("\nCaught SIGTERM\n", stderr);
+    else if (signo == SIGHUP)
+        fputs("\nCaught SIGHUP\n", stderr);
+    else if (signo == SIGPIPE)
+        fputs("\nReceived SIGPIPE.\n", stderr);
+    else
+        fprintf(stderr, "\nCaught signal: %d\n", signo);
+
+    keep_running = false;
+}
+
 void print_usage()
 {
 
 	fprintf(stderr, \
 		"limetx -%s\n\
-Usage:\nlimetx -s SymbolRate [-i File Input] [-o File Output] [-f Frequency in Khz]  [-g Gain] [-h] \n\
+Usage:\nlimetx -s SymbolRate [-i File Input] [-o File Output] [-f Frequency in Khz]  [-g Gain] [-t SampleType] [-h] \n\
 -i            Input IQ File I16 format (default stdin) \n\
 -i            OutputIQFile (default stdout) \n\
 -s            SymbolRate in KS \n\
 -f            Frequency in Khz\n\
 -g            Gain 0 to 100\n\
+-t            Input sample type {float,I16} I16 by default\n\
 -h            help (print this help).\n\
 Example : ./limetx -s 1000 -f 1242000 -g 80\n\
 \n", \
@@ -418,9 +438,11 @@ int main(int argc, char **argv)
 	int Gain = 50;
 	int a;
 	int anyargs = 0;
+    enum {TYPE_I16,TYPE_FLOAT};
+    int TypeInput = TYPE_I16;
 	while (1)
 	{
-		a = getopt(argc, argv, "i:o:s:f:g:h");
+		a = getopt(argc, argv, "i:o:s:f:g:ht:");
 
 		if (a == -1)
 		{
@@ -457,6 +479,10 @@ int main(int argc, char **argv)
 		case 'g': // Gain 0..100
 			Gain = atoi(optarg);
 			break;
+        case 't': // Input Type
+			if (strcmp("float", optarg) == 0) TypeInput = TYPE_FLOAT;
+            if (strcmp("i16", optarg) == 0) TypeInput = TYPE_I16;
+			break;
 		case 'h': // help
 			print_usage();
 			exit(0);
@@ -489,10 +515,22 @@ int main(int argc, char **argv)
 	if (SymbolRate == 0) {
 		fprintf(stderr, "Need set a SampleRate \n"); exit(0);
 	}
-    #define BUFFER_SIZE 1000
+
+     // register signal handlers
+    if (signal(SIGINT, signal_handler) == SIG_ERR)
+        fputs("Warning: Can not install signal handler for SIGINT\n", stderr);
+    if (signal(SIGTERM, signal_handler) == SIG_ERR)
+        fputs("Warning: Can not install signal handler for SIGTERM\n", stderr);
+    if (signal(SIGHUP, signal_handler) == SIG_ERR)
+        fputs("Warning: Can not install signal handler for SIGHUP\n", stderr);
+    if (signal(SIGPIPE, signal_handler) == SIG_ERR)
+        fputs("Warning: Can not install signal handler for SIGPIPE\n", stderr);
+
+    #define BUFFER_SIZE 1000*7
     scmplx BufferIQ[BUFFER_SIZE];
 
 	scmplx BufferIQRx[BUFFER_SIZE];
+    float fBufferIQ[BUFFER_SIZE*2];
 
     limesdr_init();
     limesdr_set_sr(SymbolRate,0);
@@ -506,30 +544,34 @@ int main(int argc, char **argv)
 	limesdr_set_rxfreq(2322e6);
 	limesdr_receive();
 	*/
-    while(1)
+    keep_running=true;
+    while(keep_running)
     { 
 #define TV
 #ifdef TV
-		static lms_stream_status_t TxStatus;
-		LMS_GetStreamStatus(&streamId, &TxStatus);
-		if (TxStatus.fifoFilledCount < FIFO_SIZE / 2)
-		{
-			int NbRead = fread(BufferIQ, sizeof(scmplx), BUFFER_SIZE, input);
-			if (NbRead < 0) break;
-			if (NbRead != BUFFER_SIZE) fprintf(stderr, "Incomplete buffer %d/%d\n", NbRead, BUFFER_SIZE);
-			lime_tx_samples(BufferIQ, NbRead);
-		}
-		else
-		{
-			/*while (TxStatus.fifoFilledCount >= (FIFO_SIZE*0.9))
-			{
-				int NbRead = fread(BufferIQ, sizeof(scmplx), BUFFER_SIZE, input);
-				LMS_GetStreamStatus(&streamId, &TxStatus); // We read but not transmit : drop samples
-				fprintf(stderr,"Overflow %d \n", TxStatus.fifoFilledCount);
-			}*/
-			usleep(1);
-		}
-		//int LimeRead=lime_rx_samples(BufferIQRx, BUFFER_SIZE);
+        if(TypeInput==TYPE_I16)
+        {
+            int NbRead=fread(BufferIQ,sizeof(scmplx),BUFFER_SIZE,input);
+            if(NbRead==0) {usleep(1000);continue;}
+            if(NbRead<0) break;
+            if(NbRead!=BUFFER_SIZE) fprintf(stderr,"Incomplete buffer %d/%d\n",NbRead,BUFFER_SIZE);
+		    lime_tx_samples(BufferIQ, NbRead);
+        }
+        if(TypeInput==TYPE_FLOAT)
+        {
+ 
+            int NbRead=fread(fBufferIQ,sizeof(float),BUFFER_SIZE*2,input);
+            if(NbRead<0) break;
+            int NbSample=0;
+            for(int i=0;i<NbRead;i+=2)
+            {
+                BufferIQ[NbSample].re=(short)(fBufferIQ[i]*32767);
+                BufferIQ[NbSample++].im=(short)(fBufferIQ[i+1]*32767);
+            }
+		    lime_tx_samples(BufferIQ, NbSample);
+        }
+
+    		//int LimeRead=lime_rx_samples(BufferIQRx, BUFFER_SIZE);
 		//SendToOutput(BufferIQRxLimeRead);
 		//lime_tx_samples(BufferIQRx, LimeRead);
 		//SendToOutput(BufferIQRx, LimeRead);
