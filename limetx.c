@@ -44,7 +44,7 @@ int m_oversample = 0;
 int m_Bandwidth = 2000000;
 int OVERSAMPLE = 16;
 
-
+#define FIFO_SIZE (1024 * 1000)
 
 
 int limesdr_init() {
@@ -84,7 +84,7 @@ int limesdr_init() {
 		return -1;
 
 	streamId.channel = 0;
-	streamId.fifoSize = 1024 * 1000;
+	streamId.fifoSize = FIFO_SIZE;  
 	streamId.throughputVsLatency = 0.2;
 	streamId.isTx = true;
 	streamId.dataFmt = LMS_FMT_I16;
@@ -366,7 +366,7 @@ int lime_tx_samples(scmplx *s, int len)
 	{
 		//static lms_stream_status_t TxStatus;
 		//LMS_GetStreamStatus(&streamId, &TxStatus);
-		fprintf(stderr,"Filled %d SymbolRate %f\n", TxStatus.fifoFilledCount,TxStatus.sampleRate);
+		//fprintf(stderr,"Filled %d SymbolRate %f\n", TxStatus.fifoFilledCount,TxStatus.sampleRate);
 
 	}
 	return 0;
@@ -526,7 +526,7 @@ int main(int argc, char **argv)
     if (signal(SIGPIPE, signal_handler) == SIG_ERR)
         fputs("Warning: Can not install signal handler for SIGPIPE\n", stderr);
 
-    #define BUFFER_SIZE 1000*7
+    #define BUFFER_SIZE 1000
     scmplx BufferIQ[BUFFER_SIZE];
 
 	scmplx BufferIQRx[BUFFER_SIZE];
@@ -551,11 +551,18 @@ int main(int argc, char **argv)
 #ifdef TV
         if(TypeInput==TYPE_I16)
         {
-            int NbRead=fread(BufferIQ,sizeof(scmplx),BUFFER_SIZE,input);
-            if(NbRead==0) {usleep(1000);continue;}
-            if(NbRead<0) break;
-            if(NbRead!=BUFFER_SIZE) fprintf(stderr,"Incomplete buffer %d/%d\n",NbRead,BUFFER_SIZE);
-		    lime_tx_samples(BufferIQ, NbRead);
+			lms_stream_status_t TxStatus;
+			LMS_GetStreamStatus(&streamId, &TxStatus);
+			if (TxStatus.fifoFilledCount < FIFO_SIZE / 2)
+			{
+				int NbRead = fread(BufferIQ, sizeof(scmplx), BUFFER_SIZE, input);
+				if (NbRead == 0) { usleep(1000); continue; }
+				if (NbRead < 0) break;
+				if (NbRead != BUFFER_SIZE) fprintf(stderr, "Incomplete buffer %d/%d\n", NbRead, BUFFER_SIZE);
+				lime_tx_samples(BufferIQ, NbRead);
+			}
+			else
+				usleep(1);
         }
         if(TypeInput==TYPE_FLOAT)
         {
