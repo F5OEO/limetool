@@ -44,6 +44,8 @@ int m_oversample = 0;
 int m_Bandwidth = 2000000;
 int OVERSAMPLE = 16;
 
+enum {TYPE_U8,TYPE_I16,TYPE_FLOAT};
+int TypeInput = TYPE_I16;
 #define FIFO_SIZE (1024 * 1000)
 
 
@@ -123,6 +125,7 @@ int limesdr_deinit(void) {
 	res= LMS_StopStream(&streamIdRx);
 	res = LMS_EnableChannel(device, LMS_CH_RX, 0, false);
 	res= LMS_DestroyStream(device, &streamIdRx);
+
 
 	res= LMS_Close(device);
 	device = NULL;
@@ -213,6 +216,7 @@ int limesdr_set_sr(double sr,int OverSample) {
 		m_Bandwidth = (m_sr * 1.4 < 2500000) ? 2500000 : m_sr * 1.4;
 		LMS_SetLPFBW(device, LMS_CH_TX, 0, m_Bandwidth);
 		
+
 		float_type HostSR, DacSR;
 		LMS_GetSampleRate(device, LMS_CH_TX, 0, &HostSR, &DacSR);
 		fprintf(stderr,"SR %f DAC %f\n", HostSR, DacSR);
@@ -384,14 +388,37 @@ int lime_rx_samples(scmplx *BufferRx, int len)
 
 int SendToOutput(scmplx *BufferRx, int len)
 {
-	for (int i = 0; i < len; i++)
-	{
-		unsigned char SymbI, SymbQ;
-		SymbI = (unsigned char)((BufferRx[i].re*127.0 / 32767.0) + 127);
-		SymbQ = (unsigned char)((BufferRx[i].im*127.0 / 32767.0) + 127);
-		fwrite(&SymbI, 1, 1, output);
-		fwrite(&SymbQ, 1, 1, output);
-	}
+    
+    switch(TypeInput)
+    {
+            case TYPE_I16:fwrite(BufferRx,sizeof(scmplx),len,output);break;
+            case TYPE_U8:
+            {
+                for (int i = 0; i < len; i++)
+            	{
+		            unsigned char SymbI, SymbQ;
+		            SymbI = (unsigned char)((BufferRx[i].re*127.0 / 32767.0) + 127);
+		            SymbQ = (unsigned char)((BufferRx[i].im*127.0 / 32767.0) + 127);
+		            fwrite(&SymbI, 1, 1, output);
+		            fwrite(&SymbQ, 1, 1, output);
+	            }       
+            };
+            break;
+            case TYPE_FLOAT:
+            {
+                for (int i = 0; i < len; i++)
+            	{
+		            float SymbI, SymbQ;
+		            SymbI = (float)((BufferRx[i].re/ 32767.0));
+		            SymbQ = (float)((BufferRx[i].im/ 32767.0));
+		            fwrite(&SymbI, sizeof(float), 1, output);
+		            fwrite(&SymbQ, sizeof(float), 1, output);
+	            }      
+            }
+            break;
+
+    }
+	return 0;
 }
 
 static bool keep_running=false;
@@ -416,16 +443,15 @@ void print_usage()
 {
 
 	fprintf(stderr, \
-		"limetx -%s\n\
-Usage:\nlimetx -s SymbolRate [-i File Input] [-o File Output] [-f Frequency in Khz]  [-g Gain] [-t SampleType] [-h] \n\
--i            Input IQ File I16 format (default stdin) \n\
--i            OutputIQFile (default stdout) \n\
+		"limerx -%s\n\
+Usage:\nlimerx -s SymbolRate -f Frequency in Khz [-o File Output] [-g Gain] [-t SampleType] [-h] \n\
+-o            OutputIQFile (default stdout) \n\
 -s            SymbolRate in KS \n\
 -f            Frequency in Khz\n\
 -g            Gain 0 to 100\n\
--t            Input sample type {float,I16} I16 by default\n\
+-t            Input sample type {float,i16,u8} i16 by default\n\
 -h            help (print this help).\n\
-Example : ./limetx -s 1000 -f 1242000 -g 80\n\
+Example : ./limerx -s 1000 -f 1242000 -g 80\n\
 \n", \
 PROGRAM_VERSION);
 
@@ -441,8 +467,8 @@ int main(int argc, char **argv)
 	int Gain = 50;
 	int a;
 	int anyargs = 0;
-    enum {TYPE_I16,TYPE_FLOAT};
-    int TypeInput = TYPE_I16;
+    
+    
 	while (1)
 	{
 		a = getopt(argc, argv, "i:o:s:f:g:ht:");
@@ -485,6 +511,7 @@ int main(int argc, char **argv)
         case 't': // Input Type
 			if (strcmp("float", optarg) == 0) TypeInput = TYPE_FLOAT;
             if (strcmp("i16", optarg) == 0) TypeInput = TYPE_I16;
+             if (strcmp("u8", optarg) == 0) TypeInput = TYPE_U8;
 			break;
 		case 'h': // help
 			print_usage();
@@ -537,61 +564,16 @@ int main(int argc, char **argv)
 
     limesdr_init();
     limesdr_set_sr(SymbolRate,0);
-    limesdr_set_freq(TxFrequency);
-	limesdr_stoptx();
-	limesdr_set_level(Gain);
-    limesdr_transmit();
-	limesdr_set_level(Gain);
-	/*
-	limesdr_set_rx_level(90);
-	limesdr_set_rxfreq(2322e6);
+    limesdr_set_rx_level(Gain);
+	limesdr_set_rxfreq(TxFrequency);
 	limesdr_receive();
-	*/
+	
     keep_running=true;
     while(keep_running)
     { 
-#define TV
-#ifdef TV
-        if(TypeInput==TYPE_I16)
-        {
-			lms_stream_status_t TxStatus;
-			LMS_GetStreamStatus(&streamId, &TxStatus);
-			if (TxStatus.fifoFilledCount < FIFO_SIZE / 2)
-			{
-				int NbRead = fread(BufferIQ, sizeof(scmplx), BUFFER_SIZE, input);
-				if (NbRead == 0) { usleep(1000); continue; }
-				if (NbRead < 0) break;
-				if (NbRead != BUFFER_SIZE) fprintf(stderr, "Incomplete buffer %d/%d\n", NbRead, BUFFER_SIZE);
-				lime_tx_samples(BufferIQ, NbRead);
-			}
-			else
-				usleep(1);
-        }
-        if(TypeInput==TYPE_FLOAT)
-        {
- 
-            int NbRead=fread(fBufferIQ,sizeof(float),BUFFER_SIZE*2,input);
-            if(NbRead<0) break;
-            int NbSample=0;
-            for(int i=0;i<NbRead;i+=2)
-            {
-                BufferIQ[NbSample].re=(short)(fBufferIQ[i]*32767);
-                BufferIQ[NbSample++].im=(short)(fBufferIQ[i+1]*32767);
-            }
-		    lime_tx_samples(BufferIQ, NbSample);
-        }
-
-    		//int LimeRead=lime_rx_samples(BufferIQRx, BUFFER_SIZE);
-		//SendToOutput(BufferIQRxLimeRead);
-		//lime_tx_samples(BufferIQRx, LimeRead);
-		//SendToOutput(BufferIQRx, LimeRead);
-        
-#endif
-
-#ifdef TPDER
-	int LimeRead = lime_rx_samples(BufferIQRx, BUFFER_SIZE);
-	lime_tx_samples(BufferIQRx, LimeRead);
-#endif
+        int LimeRead=lime_rx_samples(BufferIQRx, BUFFER_SIZE);
+        if(LimeRead>0)
+    		SendToOutput(BufferIQRx,LimeRead);
     }
     limesdr_deinit();
 }
