@@ -33,7 +33,7 @@ typedef struct {
 
 static bool m_running = false;
 static lms_device_t* device = NULL;
-static lms_stream_t streamId,streamIdRx;
+static lms_stream_t streamId,streamIdRx,streamIdRx2;
 static int   m_limesdr_status = EXP_CONF;
 bool m_limesdr_tx = false;
 bool m_limesdr_rx = false;
@@ -43,7 +43,7 @@ float m_gain = 0.0;
 int m_oversample = 0;
 int m_Bandwidth = 2000000;
 int OVERSAMPLE = 16;
-
+int NbChannelRx=0;
 enum {TYPE_U8,TYPE_I16,TYPE_FLOAT};
 int TypeInput = TYPE_I16;
 #define FIFO_SIZE (1024 * 1000)
@@ -57,7 +57,7 @@ int limesdr_init() {
 	lms_info_str_t list[8];
 	if ((n = LMS_GetDeviceList(list)) < 0)
     {
-        fprintf(stderr,"No Lime found\n");
+        fprintf(stderr,"No LimeSDR found\n");
 		return -1;
 	}
 	if (device == NULL) {
@@ -78,38 +78,51 @@ int limesdr_init() {
 		return -1;
 	}
 	//LMS_Reset(device);
-
-	if (LMS_EnableChannel(device, LMS_CH_TX, 0, false) != 0) //Not enable
-		return -1;
-
-	if (LMS_SetAntenna(device, LMS_CH_TX, 0, 1) != 0)
-		return -1;
-
-	streamId.channel = 0;
-	streamId.fifoSize = FIFO_SIZE;  
-	streamId.throughputVsLatency = 0.2;
-	streamId.isTx = true;
-	streamId.dataFmt = LMS_FMT_I16;
-
-	int res = LMS_SetupStream(device, &streamId);
 	
-	m_running = true;
+    NbChannelRx=LMS_GetNumChannels(device, LMS_CH_RX);
+            fprintf(stderr,"Rx Channels = %d\n",NbChannelRx);
 
-
-	//For Repeater
-	if (LMS_EnableChannel(device, LMS_CH_RX, 0, true) != 0)
+	if (LMS_EnableChannel(device, LMS_CH_RX, 0, false) != 0)
+    {
+        fprintf(stderr,"Enable channel 0 failed\n");
 		return -1;
-	if (LMS_SetAntenna(device, LMS_CH_RX, 0, 1) != 0)
-		return -1;
-
-	streamIdRx.channel = 0;
+    }
+    if (LMS_SetAntenna(device, LMS_CH_RX, 0, 1) != 0)
+    {
+        fprintf(stderr,"Antenna channel 0 failed\n");
+        return -1;
+    }
+ 
+    streamIdRx.channel = 0;
 	streamIdRx.fifoSize = 1024 * 1000;
 	streamIdRx.throughputVsLatency = 0.2;
 	streamIdRx.isTx = false;
 	streamIdRx.dataFmt = LMS_FMT_I16;
 
-	res = LMS_SetupStream(device, &streamIdRx);
+   	
+	int res = LMS_SetupStream(device, &streamIdRx);
+    if(res!=0) {fprintf(stderr,"SetupStream failed\n");return -1;}
 
+    if(NbChannelRx>1)
+    {
+        if (LMS_EnableChannel(device, LMS_CH_RX, 1, true) != 0)
+	    {
+            fprintf(stderr,"Enable channel 1 failed\n");
+		    return -1;
+        }
+       if (LMS_SetAntenna(device, LMS_CH_RX, 1, 1) != 0)
+        {
+            fprintf(stderr,"Enable channel 1 failed\n");
+		    return -1;
+        }
+        streamIdRx2.channel = 1;
+    	streamIdRx2.fifoSize = 1024 * 1000;
+    	streamIdRx2.throughputVsLatency = 0.2;
+    	streamIdRx2.isTx = false;
+    	streamIdRx2.dataFmt = LMS_FMT_I16;
+        res = LMS_SetupStream(device, &streamIdRx2);
+    }
+	m_running=true;
 	return 0;
 }
 
@@ -117,16 +130,16 @@ int limesdr_deinit(void) {
 	if (m_running == false) return -1;
 	m_running = false;
 	int res;
-	m_limesdr_tx = false;
-	res= LMS_StopStream(&streamId);
-	res = LMS_EnableChannel(device, LMS_CH_TX, 0, false);
-	res= LMS_DestroyStream(device, &streamId);
-	//
+	
 	res= LMS_StopStream(&streamIdRx);
 	res = LMS_EnableChannel(device, LMS_CH_RX, 0, false);
 	res= LMS_DestroyStream(device, &streamIdRx);
-
-
+ if(NbChannelRx>1)
+{
+    res= LMS_StopStream(&streamIdRx2);
+	res = LMS_EnableChannel(device, LMS_CH_RX, 1, false);
+	res= LMS_DestroyStream(device, &streamIdRx2);
+}
 	res= LMS_Close(device);
 	device = NULL;
 	m_limesdr_status = EXP_CONF;
@@ -142,7 +155,10 @@ void limesdr_set_freq(double freq) {
 
 void limesdr_set_rxfreq(double freq) {
 	if (m_running == false) return;
-	LMS_SetLOFrequency(device, LMS_CH_RX, 0, freq);
+	if(LMS_SetLOFrequency(device, LMS_CH_RX, 0, freq)!=0)
+    {
+        fprintf(stderr,"Set Rx Frequency failed %f\n",freq);
+    }
 
 }
 
@@ -165,6 +181,7 @@ void limesdr_set_rx_level(int level) {
 	float_type gain = level / 100.0;
 	
 	LMS_SetNormalizedGain(device, LMS_CH_RX, 0, gain);
+    LMS_SetNormalizedGain(device, LMS_CH_RX, 1, gain);
 }
 
 int limesdr_set_sr(double sr,int OverSample) {
@@ -173,7 +190,7 @@ int limesdr_set_sr(double sr,int OverSample) {
 	if (m_running == false) return 0;
 		float_type freq = 0;
 		lms_range_t Range;
-		LMS_GetSampleRateRange(device, LMS_CH_TX, &Range);
+		LMS_GetSampleRateRange(device, LMS_CH_RX, &Range);
 		
 		if (sr < Range.min)
 			m_oversample = 1;
@@ -186,9 +203,9 @@ int limesdr_set_sr(double sr,int OverSample) {
 		
 		if ((m_sr < Range.min) || (m_sr > Range.max))
 		{
-			char sDebug[255];
-			sprintf(sDebug, "Valid SR=%f-%f by %f step", Range.min, Range.max, Range.step);
-			printf("%s",sDebug);
+
+			fprintf(stderr, "Valid SR=%f-%f by %f step\n", Range.min, Range.max, Range.step);
+
 		}
 		
 		
@@ -199,35 +216,35 @@ int limesdr_set_sr(double sr,int OverSample) {
 			if ((step_over*m_sr) < 60e6) break;
 		}
 		OVERSAMPLE = step_over;
-		fprintf(stderr,     "Oversample=%d\n", OVERSAMPLE);
-		/*
-		if (m_sr <= 400000)	OVERSAMPLE = 32;
-		if((m_sr>400000)&&(m_sr<=800000)) 	OVERSAMPLE = 16;
-		if((m_sr>800000)&&(m_sr<=1600000)) OVERSAMPLE = 8;
-		if ((m_sr>1600000) && (m_sr <= 3200000)) OVERSAMPLE = 4;
-		if ((m_sr>3200000) && (m_sr <= 6400000)) OVERSAMPLE = 2;
-		if ((m_sr>6400000) ) OVERSAMPLE = 1;
-		*/
+		
+		
 
 		if (LMS_SetSampleRate(device, m_sr, OVERSAMPLE) != 0)
 		{
-			printf("SR Not Set");
+			fprintf(stderr,"SR Not Set with decimation %d\n",OVERSAMPLE);
 		}
-		m_Bandwidth = (m_sr * 1.4 < 2500000) ? 2500000 : m_sr * 1.4;
-		LMS_SetLPFBW(device, LMS_CH_TX, 0, m_Bandwidth);
-		
+        else
+            fprintf(stderr,     "SR=%f Decimation=%d\n",m_sr, OVERSAMPLE);
+        float_type HostSR, DacSR;
 
-		float_type HostSR, DacSR;
-		LMS_GetSampleRate(device, LMS_CH_TX, 0, &HostSR, &DacSR);
+        LMS_GetSampleRate(device, LMS_CH_RX, 0, &HostSR, &DacSR);
+		fprintf(stderr,"SR %f DAC %f\n", HostSR, DacSR);        
+
+		m_Bandwidth = (m_sr * 2 < 2500000) ? 2500000 : m_sr * 2;
+		LMS_SetLPFBW(device, LMS_CH_RX, 0, m_Bandwidth);
+        lms_range_t RangeBP;
+        LMS_GetLPFBWRange(device,LMS_CH_RX,&RangeBP);	
+        fprintf(stderr, "Valid BP=%f-%f by %f step\n", RangeBP.min, RangeBP.max, RangeBP.step);	
+
+
+        float_type BandWidth;
+        LMS_GetLPFBW(device,LMS_CH_RX,0,&BandWidth);
+        fprintf(stderr,"Bandwidth=%f\n",BandWidth);		
+
+		LMS_GetSampleRate(device, LMS_CH_RX, 0, &HostSR, &DacSR);
 		fprintf(stderr,"SR %f DAC %f\n", HostSR, DacSR);
 		
-		/*LMS_GetLOFrequency(device, LMS_CH_TX, 0, &freq);
-		if (freq != 0) {
-			LMS_SetNCOFrequency(device, LMS_CH_TX, 0, ShiftNCO, 0);
-			LMS_SetNCOIndex(device, LMS_CH_TX, 0, 0, true);
-		}
-		*/
-	
+			
 	return 0;
 }
 
@@ -297,7 +314,7 @@ void limesdr_receive(void)
 
 	if (m_running == false) return;
 	m_limesdr_rx = false;
-	LMS_SetLPFBW(device, LMS_CH_RX, 0, m_Bandwidth);
+	//LMS_SetLPFBW(device, LMS_CH_RX, 0, m_Bandwidth);
 	LMS_EnableChannel(device, LMS_CH_RX, 0, true);
 	LMS_StartStream(&streamIdRx);
 	m_limesdr_rx = true;
@@ -563,9 +580,10 @@ int main(int argc, char **argv)
     float fBufferIQ[BUFFER_SIZE*2];
 
     limesdr_init();
+    limesdr_set_rxfreq(TxFrequency);
     limesdr_set_sr(SymbolRate,0);
     limesdr_set_rx_level(Gain);
-	limesdr_set_rxfreq(TxFrequency);
+	
 	limesdr_receive();
 	
     keep_running=true;
