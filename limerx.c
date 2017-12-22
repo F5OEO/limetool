@@ -228,19 +228,23 @@ int limesdr_set_sr(double sr,int OverSample) {
         float_type HostSR, DacSR;
 
         LMS_GetSampleRate(device, LMS_CH_RX, 0, &HostSR, &DacSR);
-		fprintf(stderr,"SR %f DAC %f\n", HostSR, DacSR);        
+		fprintf(stderr,"SR %f DAC %f\n", HostSR, DacSR); 
 
-		m_Bandwidth = (m_sr * 2 < 2500000) ? 2500000 : m_sr * 2;
-		LMS_SetLPFBW(device, LMS_CH_RX, 0, m_Bandwidth);
-        lms_range_t RangeBP;
+        lms_range_t RangeBP;       
         LMS_GetLPFBWRange(device,LMS_CH_RX,&RangeBP);	
         fprintf(stderr, "Valid BP=%f-%f by %f step\n", RangeBP.min, RangeBP.max, RangeBP.step);	
 
-
+        m_Bandwidth=m_sr;
+		m_Bandwidth = (m_sr  < RangeBP.min) ? RangeBP.min : m_Bandwidth;
+        m_Bandwidth = (m_sr  > RangeBP.max) ? RangeBP.max : m_Bandwidth;
+		//if(LMS_SetLPFBW(device, LMS_CH_RX, 0, m_Bandwidth)!=0)
+        //    fprintf(stderr,"SetLPF with %d bandwidth failed\n",m_Bandwidth);
+      
         float_type BandWidth;
         LMS_GetLPFBW(device,LMS_CH_RX,0,&BandWidth);
         fprintf(stderr,"Bandwidth=%f\n",BandWidth);		
 
+      
 		LMS_GetSampleRate(device, LMS_CH_RX, 0, &HostSR, &DacSR);
 		fprintf(stderr,"SR %f DAC %f\n", HostSR, DacSR);
 		
@@ -461,12 +465,14 @@ void print_usage()
 
 	fprintf(stderr, \
 		"limerx -%s\n\
-Usage:\nlimerx -s SymbolRate -f Frequency in Khz [-o File Output] [-g Gain] [-t SampleType] [-h] \n\
+Usage:\nlimerx -s SymbolRate -f Frequency in Khz [-o File Output] [-g Gain] [-t SampleType] [-b BurstSize] [-p Partial Index] [-h] \n\
 -o            OutputIQFile (default stdout) \n\
 -s            SymbolRate in KS \n\
 -f            Frequency in Khz\n\
 -g            Gain 0 to 100\n\
 -t            Input sample type {float,i16,u8} i16 by default\n\
+-b            Burst Size buffer (1024 default)\n\
+-p            Partial write : only 1/p is sent\n\
 -h            help (print this help).\n\
 Example : ./limerx -s 1000 -f 1242000 -g 80\n\
 \n", \
@@ -484,11 +490,12 @@ int main(int argc, char **argv)
 	int Gain = 50;
 	int a;
 	int anyargs = 0;
-    
+    int Burst=1024;
+    int Partial=1;
     
 	while (1)
 	{
-		a = getopt(argc, argv, "i:o:s:f:g:ht:");
+		a = getopt(argc, argv, "i:o:s:f:g:ht:b:p:");
 
 		if (a == -1)
 		{
@@ -530,6 +537,13 @@ int main(int argc, char **argv)
             if (strcmp("i16", optarg) == 0) TypeInput = TYPE_I16;
              if (strcmp("u8", optarg) == 0) TypeInput = TYPE_U8;
 			break;
+  		case 'b': // Burst buffer
+			Burst = atoi(optarg);
+			break;
+  		case 'p': // Partial buffer
+			Partial = atoi(optarg);
+			break;
+
 		case 'h': // help
 			print_usage();
 			exit(0);
@@ -576,7 +590,7 @@ int main(int argc, char **argv)
     #define BUFFER_SIZE 1000
     scmplx BufferIQ[BUFFER_SIZE];
 
-	scmplx BufferIQRx[BUFFER_SIZE];
+	scmplx *BufferIQRx=(scmplx *)malloc(Burst*sizeof(scmplx));
     float fBufferIQ[BUFFER_SIZE*2];
 
     limesdr_init();
@@ -587,12 +601,16 @@ int main(int argc, char **argv)
 	limesdr_receive();
 	
     keep_running=true;
+    int CountBuffer=0;
     while(keep_running)
     { 
-        int LimeRead=lime_rx_samples(BufferIQRx, BUFFER_SIZE);
-        if(LimeRead>0)
+        int LimeRead=lime_rx_samples(BufferIQRx, Burst);
+        CountBuffer=(CountBuffer+1)%Partial;
+        if((LimeRead>0)&&(CountBuffer==0))
     		SendToOutput(BufferIQRx,LimeRead);
     }
+
     limesdr_deinit();
+        free(BufferIQRx);
 }
 
