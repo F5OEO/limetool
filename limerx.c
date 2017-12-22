@@ -82,6 +82,8 @@ int limesdr_init() {
     NbChannelRx=LMS_GetNumChannels(device, LMS_CH_RX);
             fprintf(stderr,"Rx Channels = %d\n",NbChannelRx);
 
+    NbChannelRx=1; // WE force to have only one channel right now
+
 	if (LMS_EnableChannel(device, LMS_CH_RX, 0, false) != 0)
     {
         fprintf(stderr,"Enable channel 0 failed\n");
