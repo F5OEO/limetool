@@ -417,14 +417,21 @@ int SendToOutput(scmplx *BufferRx, int len)
             case TYPE_I16:fwrite(BufferRx,sizeof(scmplx),len,output);break;
             case TYPE_U8:
             {
+                static unsigned char *BufferOut=NULL;
+                if(BufferOut==NULL) BufferOut=(unsigned char *)malloc(2*len); // Assume Len is fixed at each call
                 for (int i = 0; i < len; i++)
             	{
 		            unsigned char SymbI, SymbQ;
-		            SymbI = (unsigned char)((BufferRx[i].re*127.0 / 32767.0) + 127);
-		            SymbQ = (unsigned char)((BufferRx[i].im*127.0 / 32767.0) + 127);
-		            fwrite(&SymbI, 1, 1, output);
-		            fwrite(&SymbQ, 1, 1, output);
+		            //SymbI = (unsigned char)((BufferRx[i].re / 256.0) + 127);
+		            //SymbQ = (unsigned char)((BufferRx[i].im / 256.0) + 127);
+                    SymbI = (unsigned char)(BufferRx[i].re >>8)+127;
+		            SymbQ = (unsigned char)(BufferRx[i].im >>8)+127;
+                    BufferOut[i*2]=SymbI;
+                    BufferOut[i*2+1]=SymbQ;
+		            //fwrite(&SymbI, 1, 1, output);
+		            //fwrite(&SymbQ, 1, 1, output);
 	            }       
+                fwrite(BufferOut,1,len*2,output);
             };
             break;
             case TYPE_FLOAT:
@@ -589,7 +596,7 @@ int main(int argc, char **argv)
     if (signal(SIGPIPE, signal_handler) == SIG_ERR)
         fputs("Warning: Can not install signal handler for SIGPIPE\n", stderr);
 
-    #define BUFFER_SIZE 1000
+    #define BUFFER_SIZE 10000
     scmplx BufferIQ[BUFFER_SIZE];
 
 	scmplx *BufferIQRx=(scmplx *)malloc(Burst*sizeof(scmplx));
